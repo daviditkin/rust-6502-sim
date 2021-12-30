@@ -1,27 +1,21 @@
-mod Bus;
-mod Processor;
-mod Memory;
+mod bus;
+mod processor;
+mod memory;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use crate::Bus::{Bus as TBUS, BusDevice, make_device, SimpleBus, SimpleBusDevice};
-use crate::Memory::memory;
-use crate::Processor::{create6502, ProcessorTrait};
+use crate::bus::{Bus, make_device, SimpleBus};
+use crate::processor::create6502;
+
 
 fn main() {
-    let mut rcBus: Rc<RefCell<dyn TBUS>> = Rc::new(RefCell::new(SimpleBus {
+    let mut rc_bus: Rc<RefCell<dyn Bus>> = Rc::new(RefCell::new(SimpleBus {
         registered: vec![],
     }));
 
-    let mut processor = create6502(Rc::clone(&rcBus));
+    let mut processor = create6502(Rc::clone(&rc_bus));
+    rc_bus.borrow_mut().register_device(&processor);
 
-
-    let device1 = make_device(Rc::clone(&rcBus));
-
-    {
-        rcBus.borrow_mut().registerDevice(&processor);
-    }
-
-    println!("Hello, world!");
+//    processor.borrow_mut().tick();
 }
 
