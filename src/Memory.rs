@@ -7,20 +7,20 @@ pub struct memory {
 }
 
 impl BusDevice for memory {
-    fn isReadableFrom(&self, address: Address) -> bool {
+    fn isReadableFor(&self, address: Address) -> bool {
         address >= self.lowerBound && address <= self.upperBound
     }
 
-    fn isWriteableTo(&self, address: Address) -> bool {
+    fn isWritableFor(&self, address: Address) -> bool {
         address >= self.lowerBound && address <= self.upperBound
     }
 
     fn doRead(&self, address: Address) -> Data {
-        self.mem[address]
+        self.mem[address as usize]
     }
 
     fn doWrite(&mut self, address: Address, data: Data) {
-        self.mem[address] = data;
+        self.mem[address as usize] = data;
     }
 }
 

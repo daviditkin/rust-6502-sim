@@ -2,29 +2,26 @@ mod Bus;
 mod Processor;
 mod Memory;
 
-use crate::Bus::{Bus as TBUS, SimpleBus};
+use std::cell::RefCell;
+use std::rc::Rc;
+use crate::Bus::{Bus as TBUS, BusDevice, make_device, SimpleBus, SimpleBusDevice};
 use crate::Memory::memory;
-use crate::Processor::Proc6502;
+use crate::Processor::{create6502, ProcessorTrait};
 
 fn main() {
+    let mut rcBus: Rc<RefCell<dyn TBUS>> = Rc::new(RefCell::new(SimpleBus {
+        registered: vec![],
+    }));
 
-    let mut b =  SimpleBus {
-        devices: Vec::new(),
-    };
+    let mut processor = create6502(Rc::clone(&rcBus));
 
-    let mut p = Proc6502 {
 
-    };
+    let device1 = make_device(Rc::clone(&rcBus));
 
-    let mut mem = memory {
-        lowerBound: 0x200,
-        upperBound: 0x1FFF,
-        mem: vec!(0; 0x1FFF),
-    };
+    {
+        rcBus.borrow_mut().registerDevice(&processor);
+    }
 
-    b.registerBusDevice(Box::new(p));
-    b.registerBusDevice(Box::new(mem));
-    b.write(0x201, 0xcc);
-    assert_eq!(b.read(0x201), 0xcc);
     println!("Hello, world!");
 }
+
