@@ -4,7 +4,6 @@ use std::rc::{Rc, Weak};
 pub type Address = u16;
 
 pub type Data = u8;
-#[derive()]
 
 // a device on bus that handles read / write / isReadable... callbacks
 pub trait BusDevice {
