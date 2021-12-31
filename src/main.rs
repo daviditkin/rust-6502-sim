@@ -22,10 +22,14 @@ fn main() {
     }));
 
     {
+        // I currently don't register the processor because the bus loops through all the registered devices and
+        // doesn't know how to skip the processor.  Which ends up causing a borrow runtime issue.  TODO
+
         //rc_bus.borrow_mut().register_device(&processor.borrow_mut().as_cloned_bus_device(Rc::clone(&processor)));
         rc_bus.borrow_mut().register_device(&Rc::clone(&memory));
 
     }
+    // Give me a tick, Vasili. One tick only.  Just testing for now. TODO
     processor.borrow_mut().tick(Rc::clone(&rc_bus));
 }
 
