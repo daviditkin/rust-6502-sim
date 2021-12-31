@@ -140,7 +140,7 @@ impl Proc6502 {
 impl ProcessorTrait for Proc6502 {
 
     fn tick(&mut self, the_bus: Rc<RefCell<dyn Bus>>) {
-        let x = self.operation_stream.first().unwrap();
+        let x = self.operation_stream.remove(0);
         match x {
             NOP => {}
             InternalOperations::DummyForOverlap => {}
@@ -163,25 +163,27 @@ impl ProcessorTrait for Proc6502 {
             FetchOpcode => {}
             FetchOperand => {}
             FetchAddrLo => {
-                self.internal_address = theBus.borrow().read(self.pc) as Address;
+                self.internal_address = the_bus.borrow().read(self.pc) as Address;
                 self.pc+=1;
             }
             FetchAddrHi => {
-                self.internal_address |= (self.bus.upgrade().unwrap().borrow().read(self.pc) as Address) << 8;
+                self.internal_address |= (the_bus.borrow().read(self.pc) as Address) << 8;
                 self.pc+=1;
             }
             FetchImmediateOperand => {
-                self.internal_operand = self.bus.upgrade().unwrap().borrow().read(self.pc);
+                self.internal_operand = the_bus.borrow().read(self.pc);
             }
             StoreToAccumulator{ src } => {
-                assert_ne!(*src, DataRegister::A);
-                self.a = self.get_reg(src);
+                assert_ne!(src, DataRegister::A);
+                self.a = self.get_reg(&src);
             }
             WriteToAddress{ src, addr } => {
-                self.bus.upgrade().unwrap().borrow().write(self.get_addr_reg(addr), self.get_reg(src));
+                the_bus.borrow().write(self.get_addr_reg(&addr), self.get_reg(&src));
 
             }
-            JumpToAddress => {}
+            JumpToAddress => {
+                self.pc = self.internal_address;
+            }
             StoreToRegisterX => {}
             ReadFromAccumulator => {}
             AddIndexLo => {}

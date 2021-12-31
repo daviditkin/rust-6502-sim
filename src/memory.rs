@@ -8,11 +8,11 @@ pub struct Memory {
 
 impl BusDevice for Memory {
     fn do_read(&self, address: Address) -> Data {
-        self.mem[address as usize]
+        self.mem[(address-self.lower_bound) as usize]
     }
 
     fn do_write(&mut self, address: Address, data: Data) {
-        self.mem[address as usize] = data;
+        self.mem[(address-self.lower_bound) as usize] = data;
     }
 
     fn is_readable_for(&self, address: Address) -> bool {

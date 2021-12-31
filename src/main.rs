@@ -16,9 +16,9 @@ fn main() {
 
     let processor = create6502(Rc::clone(&rc_bus));
     let memory:Rc<RefCell<dyn BusDevice>> = Rc::new(RefCell::new(Memory {
-        lower_bound: 0xfffc,
-        upper_bound: 0xffff,
-        mem: vec![1,2,3,4,5,6],
+        lower_bound: 0x0ffc,
+        upper_bound: 0x0fff,
+        mem: vec![0xfe,0x0f,3,4,5,6],
     }));
 
     {
@@ -30,6 +30,9 @@ fn main() {
 
     }
     // Give me a tick, Vasili. One tick only.  Just testing for now. TODO
+    // Maybe three ticks for now to see if it will complete boot sequence
+    processor.borrow_mut().tick(Rc::clone(&rc_bus));
+    processor.borrow_mut().tick(Rc::clone(&rc_bus));
     processor.borrow_mut().tick(Rc::clone(&rc_bus));
 }
 
