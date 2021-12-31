@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::rc::{Rc, Weak};
+use std::rc::{Rc};
 
 pub type Address = u16;
 
@@ -24,33 +24,6 @@ pub struct SimpleBus {
     pub registered: Vec<Rc<RefCell<dyn BusDevice>>>,
 }
 
-// A producer consumer that has a reference???? to the bus
-pub struct SimpleBusDevice {
-    bus: Weak<RefCell<dyn Bus>>,
-    data: Vec<Data>,
-    lower_bound: Address,
-    upper_bound: Address,
-}
-
-impl BusDevice for SimpleBusDevice {
-    fn do_read(&self, _address: Address) -> Data {
-        0x0
-    }
-
-    fn do_write(&mut self, address: Address, data: Data) {
-        println!("doing a write of {} to {}", data, address);
-        self.bus.upgrade().unwrap().borrow().write(address, data);
-    }
-
-    fn is_readable_for(&self, _address: Address) -> bool {
-        true
-    }
-
-    fn is_writable_for(&self, _address: Address) -> bool {
-        true
-    }
-}
-
 impl Bus for SimpleBus {
     fn write(&self, address: Address, data: Data) {
         for d in self.registered.iter() {
@@ -61,9 +34,11 @@ impl Bus for SimpleBus {
     }
 
     fn read(&self, address: Address) -> Data {
-        for d in self.registered.iter() {
-            if d.borrow().is_readable_for(address) {
-                return d.borrow_mut().do_read(address)
+        for d in &self.registered {
+            if !(d.borrow().is_readable_for(address)) {
+                continue;
+            } else {
+                return d.borrow_mut().do_read(address);
             }
         }
         0x0
@@ -72,15 +47,5 @@ impl Bus for SimpleBus {
     fn register_device(&mut self, device: &Rc<RefCell<dyn BusDevice>>) {
         self.registered.push(Rc::clone(device));
     }
-}
-
-pub fn make_device(bus: Rc<RefCell<dyn Bus>>) -> Rc<RefCell<dyn BusDevice>> {
-    Rc::new(RefCell::new(SimpleBusDevice {
-        bus: Rc::downgrade(&bus),
-        data: vec![],
-        lower_bound: 0,
-        upper_bound: 100,
-    }))
-
 }
 

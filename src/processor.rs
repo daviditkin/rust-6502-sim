@@ -8,7 +8,7 @@ use crate::processor::DataRegister::*;
 use crate::processor::AddressRegister::*;
 
 pub trait ProcessorTrait: BusDevice {
-    fn tick(&mut self);
+    fn tick(&mut self, bus: Rc<RefCell<dyn Bus>>);
 
     fn reset(&mut self);
 }
@@ -74,7 +74,7 @@ pub struct Proc6502 {
     instructions: HashMap<u8, Instruction>,
 }
 
-pub fn create6502(bus: Rc<RefCell<dyn Bus>>) -> Rc<RefCell<dyn BusDevice>> {
+pub fn create6502(bus: Rc<RefCell<dyn Bus>>) -> Rc<RefCell<Proc6502>> {
     let mut map_o_instructions: HashMap<u8, Instruction> = HashMap::new();
     map_o_instructions.insert(0xea, Instruction {
         mnemonic: "NOP".to_string(),
@@ -114,7 +114,7 @@ pub fn create6502(bus: Rc<RefCell<dyn Bus>>) -> Rc<RefCell<dyn BusDevice>> {
 }
 
 impl Proc6502 {
-    fn get_reg(&self, reg: DataRegister) -> Data {
+    fn get_reg(&self, reg: &DataRegister) -> Data {
         match reg {
             DataRegister::X => self.x,
             DataRegister::Y => self.y,
@@ -123,18 +123,24 @@ impl Proc6502 {
         }
     }
 
-    fn get_addr_reg(&self, reg: AddressRegister) -> Address {
+    fn get_addr_reg(&self, reg: &AddressRegister) -> Address {
         match reg {
             PC => self.pc,
             InternalAddress => self.internal_address,
         }
     }
+
+    pub fn as_cloned_bus_device(&self, foo: Rc<RefCell<Proc6502>>) -> Rc<RefCell<dyn BusDevice>> {
+        let rc:Rc<RefCell<dyn BusDevice>> = foo;
+        Rc::clone(&rc)
+    }
+
 }
 
 impl ProcessorTrait for Proc6502 {
 
-    fn tick(&mut self) {
-        let x = self.operation_stream.pop().unwrap();
+    fn tick(&mut self, the_bus: Rc<RefCell<dyn Bus>>) {
+        let x = self.operation_stream.first().unwrap();
         match x {
             NOP => {}
             InternalOperations::DummyForOverlap => {}
@@ -157,7 +163,7 @@ impl ProcessorTrait for Proc6502 {
             FetchOpcode => {}
             FetchOperand => {}
             FetchAddrLo => {
-                self.internal_address = self.bus.upgrade().unwrap().borrow().read(self.pc) as Address;
+                self.internal_address = theBus.borrow().read(self.pc) as Address;
                 self.pc+=1;
             }
             FetchAddrHi => {
@@ -168,7 +174,7 @@ impl ProcessorTrait for Proc6502 {
                 self.internal_operand = self.bus.upgrade().unwrap().borrow().read(self.pc);
             }
             StoreToAccumulator{ src } => {
-                assert_ne!(src, DataRegister::A);
+                assert_ne!(*src, DataRegister::A);
                 self.a = self.get_reg(src);
             }
             WriteToAddress{ src, addr } => {
