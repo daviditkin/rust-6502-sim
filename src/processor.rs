@@ -1,3 +1,4 @@
+
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use std::collections::HashMap;
@@ -13,8 +14,7 @@ pub trait ProcessorTrait: BusDevice {
     fn reset(&mut self);
 }
 
-#[derive(PartialEq)]
-#[derive(Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum DataRegister {
     X,
     Y,
@@ -22,15 +22,13 @@ pub enum DataRegister {
     InternalOperand
 }
 
-#[derive(PartialEq)]
-#[derive(Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum AddressRegister {
     PC,
     InternalAddress,
 }
 
-#[derive(PartialEq)]
-#[derive(Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum InternalOperations {
     NOP,
     DummyForOverlap,
@@ -39,20 +37,20 @@ pub enum InternalOperations {
     FetchAddrLo,
     FetchAddrHi,
     FetchImmediateOperand,
-    StoreToAccumulator{src: DataRegister},
-    WriteToAddress{src: DataRegister, addr: AddressRegister},
+    StoreToAccumulator { src: DataRegister },
+    WriteToAddress { src: DataRegister, addr: AddressRegister },
     JumpToAddress,
     StoreToRegisterX,
     ReadFromAccumulator,
     AddIndexLo,
-    AluIncr
+    AluIncr,
 }
 
 // Implementation of an instruction. addressing mode specific
 struct Instruction {
-    mnemonic: String,
-    operations: Vec<InternalOperations>,
-    can_overlap_with_next_fetch: bool,
+    pub mnemonic: String,
+    pub operations: Vec<InternalOperations>,
+    pub can_overlap_with_next_fetch: bool,
 }
 
 
@@ -78,17 +76,22 @@ pub fn create6502(bus: Rc<RefCell<dyn Bus>>) -> Rc<RefCell<Proc6502>> {
     let mut map_o_instructions: HashMap<u8, Instruction> = HashMap::new();
     map_o_instructions.insert(0xea, Instruction {
         mnemonic: "NOP".to_string(),
-        operations: vec![FetchOpcode, NOP],
+        operations: vec![NOP],
         can_overlap_with_next_fetch: false,
     });
     map_o_instructions.insert(0xa9, Instruction {
         mnemonic: "LDA #Oper".to_string(),
-        operations: vec![FetchOpcode, FetchOperand, StoreToAccumulator { src: InternalOperand }],
+        operations: vec![FetchOperand, StoreToAccumulator { src: InternalOperand }],
         can_overlap_with_next_fetch: true
     });
     map_o_instructions.insert(0x8d, Instruction {
         mnemonic: "STA Oper".to_string(),
-        operations: vec![FetchOpcode, FetchAddrLo, FetchAddrHi, WriteToAddress { src: InternalOperand, addr: InternalAddress }],
+        operations: vec![FetchAddrLo, FetchAddrHi, WriteToAddress { src: InternalOperand, addr: InternalAddress }],
+        can_overlap_with_next_fetch: false
+    });
+    map_o_instructions.insert(0x4c, Instruction {
+        mnemonic: "JMP $XXXX".to_string(),
+        operations: vec![FetchAddrLo, FetchAddrHi, JumpToAddress],
         can_overlap_with_next_fetch: false
     });
 
@@ -106,11 +109,9 @@ pub fn create6502(bus: Rc<RefCell<dyn Bus>>) -> Rc<RefCell<Proc6502>> {
     };
 
     p.pc = 0x0FFC; // BOOT location
-    let mut boot_seq = vec![FetchAddrLo, FetchAddrHi, JumpToAddress];
-    p.operation_stream.append(&mut boot_seq);
+    p.operation_stream.extend(vec![FetchAddrLo, FetchAddrHi, JumpToAddress].iter().copied());
 
     Rc::new(RefCell::new(p))
-
 }
 
 impl Proc6502 {
@@ -140,11 +141,25 @@ impl Proc6502 {
 impl ProcessorTrait for Proc6502 {
 
     fn tick(&mut self, the_bus: Rc<RefCell<dyn Bus>>) {
-        let x = self.operation_stream.remove(0);
+       if self.operation_stream.is_empty() {
+            // fetch the opcode
+            self.operation_stream.extend([FetchOpcode].iter().copied());
+
+           // The end of some instructions imply that a fetch of the next opcode should be done in parallel TODO
+       }
+
+        let mut x = self.operation_stream.remove(0);
         match x {
             NOP => {}
             InternalOperations::DummyForOverlap => {}
-            FetchOpcode => {}
+            FetchOpcode => {
+                let opcode = the_bus.borrow().read(self.pc);
+                // todo test for illegal opcode
+                let instruction = self.instructions.get(&(opcode as u8)).unwrap();
+                println!("Excecuting {} ", instruction.mnemonic);
+                self.operation_stream.extend(instruction.operations.iter().copied());
+                self.pc += 1;
+            }
             FetchOperand => {}
             FetchAddrLo => {}
             FetchAddrHi => {}
