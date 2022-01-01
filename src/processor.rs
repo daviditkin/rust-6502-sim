@@ -138,6 +138,10 @@ impl Proc6502 {
 
 }
 
+fn read_instructions() -> HashMap<u8, Instruction> {
+    todo!()
+}
+
 impl ProcessorTrait for Proc6502 {
 
     fn tick(&mut self, the_bus: Rc<RefCell<dyn Bus>>) {
@@ -148,10 +152,10 @@ impl ProcessorTrait for Proc6502 {
            // The end of some instructions imply that a fetch of the next opcode should be done in parallel TODO
        }
 
-        let mut x = self.operation_stream.remove(0);
+        let x = self.operation_stream.remove(0);
         match x {
             NOP => {}
-            InternalOperations::DummyForOverlap => {}
+            DummyForOverlap => {}
             FetchOpcode => {
                 let opcode = the_bus.borrow().read(self.pc);
                 // todo test for illegal opcode
@@ -161,27 +165,13 @@ impl ProcessorTrait for Proc6502 {
                 self.pc += 1;
             }
             FetchOperand => {}
-            FetchAddrLo => {}
-            FetchAddrHi => {}
-            InternalOperations::FetchImmediateOperand => {}
-            InternalOperations::StoreToAccumulator { .. } => {}
-            InternalOperations::WriteToAddress { .. } => {}
-            JumpToAddress => {}
-            InternalOperations::StoreToRegisterX => {}
-            InternalOperations::ReadFromAccumulator => {}
-            InternalOperations::AddIndexLo => {}
-            InternalOperations::AluIncr => {}
-        }
-        match x {
-            NOP => {}
-            DummyForOverlap => {}
-            FetchOpcode => {}
-            FetchOperand => {}
             FetchAddrLo => {
+                self.internal_address &= 0xff00;
                 self.internal_address = the_bus.borrow().read(self.pc) as Address;
                 self.pc+=1;
             }
             FetchAddrHi => {
+                self.internal_address &= 0x00ff;
                 self.internal_address |= (the_bus.borrow().read(self.pc) as Address) << 8;
                 self.pc+=1;
             }
