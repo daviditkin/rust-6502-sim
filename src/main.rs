@@ -1,12 +1,9 @@
-pub mod memory;
-pub mod processor;
-pub mod bus;
-
-use crate::bus::{Bus, SimpleBus};
-use crate::memory::Memory;
-use crate::processor::{create6502, ProcessorTrait};
 use std::cell::RefCell;
 use std::rc::Rc;
+
+use rust_6502_emulator::bus::{Bus, SimpleBus};
+use rust_6502_emulator::memory::Memory;
+use rust_6502_emulator::processor::{create6502, ProcessorTrait};
 
 fn main() {
     let bus: Rc<RefCell<dyn Bus>> = Rc::new(RefCell::new(SimpleBus { registered: vec![] }));

@@ -35,12 +35,12 @@ impl Memory {
         let mut addr = start;
         data.iter().for_each(|d| {
             self.do_write(addr, *d);
-            addr = addr + 1;
+            addr += 1;
         })
     }
 
-    pub fn as_cloned_bus_device(&self, foo: Rc<RefCell<Memory>>) -> Rc<RefCell<dyn BusDevice>> {
-        let rc: Rc<RefCell<dyn BusDevice>> = foo;
+    pub fn as_cloned_bus_device(&self, me: Rc<RefCell<Memory>>) -> Rc<RefCell<dyn BusDevice>> {
+        let rc: Rc<RefCell<dyn BusDevice>> = me;
         Rc::clone(&rc)
     }
 
@@ -60,7 +60,7 @@ impl BusDevice for Memory {
     }
 
     fn do_write(&mut self, address: Address, data: Data) {
-        self.mem.insert((address - self.lower_bound), data);
+        self.mem.insert(address - self.lower_bound, data);
     }
 
     fn is_readable_for(&self, address: Address) -> bool {

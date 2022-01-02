@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 
 use crate::bus::{Address, Bus, BusDevice, Data};
 use crate::processor::AddressRegister::*;
@@ -57,19 +57,19 @@ pub enum InternalOperations {
 
 /**
 
-A       Accumulator             OPC A	        operand is AC (implied single byte instruction)
-abs	    absolute	            OPC $LLHH	    operand is address $HHLL *
-abs,X	absolute, X-indexed	    OPC $LLHH,X	    operand is address; effective address is address incremented by X with carry **
-abs,Y	absolute, Y-indexed	    OPC $LLHH,Y	    operand is address; effective address is address incremented by Y with carry **
-#	    immediate	            OPC #$BB	    operand is byte BB
-impl	implied	                OPC	            operand implied
-ind	    indirect	            OPC ($LLHH)	    operand is address; effective address is contents of word at address: C.w($HHLL)
-X,ind	X-indexed, indirect	    OPC ($LL,X)	    operand is zeropage address; effective address is word in (LL + X, LL + X + 1), inc. without carry: C.w($00LL + X)
-ind,Y	indirect, Y-indexed	    OPC ($LL),Y	    operand is zeropage address; effective address is word in (LL, LL + 1) incremented by Y with carry: C.w($00LL) + Y
-rel	    relative	            OPC $BB	        branch target is PC + signed offset BB ***
-zpg	    zeropage	            OPC $LL	        operand is zeropage address (hi-byte is zero, address = $00LL)
-zpg,X	zeropage, X-indexed	    OPC $LL,X	    operand is zeropage address; effective address is address incremented by X without carry **
-zpg,Y	zeropage, Y-indexed	    OPC $LL,Y	    operand is zeropage address; effective address is address incremented by Y without carry **
+A       Accumulator             OPC A           operand is AC (implied single byte instruction)
+abs     absolute                OPC $LLHH       operand is address $HHLL *
+abs,X   absolute, X-indexed     OPC $LLHH,X     operand is address; effective address is address incremented by X with carry **
+abs,Y   absolute, Y-indexed     OPC $LLHH,Y     operand is address; effective address is address incremented by Y with carry **
+#       immediate               OPC #$BB        operand is byte BB
+impl    implied                 OPC             operand implied
+ind     indirect                OPC ($LLHH)     operand is address; effective address is contents of word at address: C.w($HHLL)
+X,ind   X-indexed, indirect     OPC ($LL,X)     operand is zeropage address; effective address is word in (LL + X, LL + X + 1), inc. without carry: C.w($00LL + X)
+ind,Y   indirect, Y-indexed     OPC ($LL),Y     operand is zeropage address; effective address is word in (LL, LL + 1) incremented by Y with carry: C.w($00LL) + Y
+rel     relative                OPC $BB         branch target is PC + signed offset BB ***
+zpg     zeropage                OPC $LL         operand is zeropage address (hi-byte is zero, address = $00LL)
+zpg,X   zeropage, X-indexed     OPC $LL,X       operand is zeropage address; effective address is address incremented by X without carry **
+zpg,Y   zeropage, Y-indexed     OPC $LL,Y       operand is zeropage address; effective address is address incremented by Y without carry **
 
 **/
 
@@ -97,7 +97,6 @@ struct Instruction {
 }
 
 pub struct Proc6502 {
-    bus: Weak<RefCell<dyn Bus>>,
     pc: Address,
     x: Data,
     y: Data,
@@ -186,7 +185,6 @@ pub fn create6502(bus: Rc<RefCell<dyn Bus>>) -> Proc6502 {
     );
 
     let mut p = Proc6502 {
-        bus: Rc::downgrade(&bus),
         pc: 0x0FFC,
         x: 0,
         y: 0,
@@ -225,11 +223,12 @@ impl Proc6502 {
         }
     }
 
-    pub fn as_cloned_bus_device(&self, foo: Rc<RefCell<Proc6502>>) -> Rc<RefCell<dyn BusDevice>> {
-        let rc: Rc<RefCell<dyn BusDevice>> = foo;
+    pub fn as_cloned_bus_device(&self, me: Rc<RefCell<Proc6502>>) -> Rc<RefCell<dyn BusDevice>> {
+        let rc: Rc<RefCell<dyn BusDevice>> = me;
         Rc::clone(&rc)
     }
 }
+
 
 fn read_instructions() -> HashMap<u8, Instruction> {
     todo!()
