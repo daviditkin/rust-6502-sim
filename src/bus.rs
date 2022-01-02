@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::rc::{Rc};
+use std::rc::Rc;
 
 pub type Address = u16;
 
@@ -48,4 +48,3 @@ impl Bus for SimpleBus {
         self.registered.push(Rc::clone(device));
     }
 }
-

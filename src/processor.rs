@@ -1,12 +1,12 @@
-
 use std::cell::RefCell;
-use std::rc::{Rc, Weak};
 use std::collections::HashMap;
+use std::rc::{Rc, Weak};
 
 use crate::bus::{Address, Bus, BusDevice, Data};
-use crate::processor::InternalOperations::*;
-use crate::processor::DataRegister::*;
 use crate::processor::AddressRegister::*;
+use crate::processor::AddressingMode::*;
+use crate::processor::DataRegister::*;
+use crate::processor::InternalOperations::*;
 
 pub trait ProcessorTrait: BusDevice {
     fn tick(&mut self, bus: Rc<RefCell<dyn Bus>>);
@@ -19,7 +19,7 @@ pub enum DataRegister {
     X,
     Y,
     A,
-    InternalOperand
+    InternalOperand,
 }
 
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -31,14 +31,23 @@ pub enum AddressRegister {
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum InternalOperations {
     NOP,
+    IncrementAddressByReg {
+        reg: DataRegister,
+    },
     DummyForOverlap,
     FetchOpcode,
     FetchOperand,
     FetchAddrLo,
     FetchAddrHi,
     FetchImmediateOperand,
-    StoreToAccumulator { src: DataRegister },
-    WriteToAddress { src: DataRegister, addr: AddressRegister },
+    FetchZeroPageAddr,
+    StoreToAccumulator {
+        src: DataRegister,
+    },
+    WriteToAddress {
+        src: DataRegister,
+        addr: AddressRegister,
+    },
     JumpToAddress,
     StoreToRegisterX,
     ReadFromAccumulator,
@@ -46,17 +55,45 @@ pub enum InternalOperations {
     AluIncr,
 }
 
+/**
+
+A       Accumulator             OPC A	        operand is AC (implied single byte instruction)
+abs	    absolute	            OPC $LLHH	    operand is address $HHLL *
+abs,X	absolute, X-indexed	    OPC $LLHH,X	    operand is address; effective address is address incremented by X with carry **
+abs,Y	absolute, Y-indexed	    OPC $LLHH,Y	    operand is address; effective address is address incremented by Y with carry **
+#	    immediate	            OPC #$BB	    operand is byte BB
+impl	implied	                OPC	            operand implied
+ind	    indirect	            OPC ($LLHH)	    operand is address; effective address is contents of word at address: C.w($HHLL)
+X,ind	X-indexed, indirect	    OPC ($LL,X)	    operand is zeropage address; effective address is word in (LL + X, LL + X + 1), inc. without carry: C.w($00LL + X)
+ind,Y	indirect, Y-indexed	    OPC ($LL),Y	    operand is zeropage address; effective address is word in (LL, LL + 1) incremented by Y with carry: C.w($00LL) + Y
+rel	    relative	            OPC $BB	        branch target is PC + signed offset BB ***
+zpg	    zeropage	            OPC $LL	        operand is zeropage address (hi-byte is zero, address = $00LL)
+zpg,X	zeropage, X-indexed	    OPC $LL,X	    operand is zeropage address; effective address is address incremented by X without carry **
+zpg,Y	zeropage, Y-indexed	    OPC $LL,Y	    operand is zeropage address; effective address is address incremented by Y without carry **
+
+**/
+
+#[derive(PartialEq, Debug, Copy, Clone)]
+pub enum AddressingMode {
+    Accumulator,
+    Absolute,
+    AbsIndexed { reg: DataRegister },
+    Immediate,
+    Implied,
+    Indirect,
+    IndexedIndirect, // This is always X reg. ea is word (LL + X, LL + X + 1) w/o carry
+    IndirectIndexed, // This is always Y reg. ea is word (LL, LL+1) + Y w carry
+    Relative,
+    ZeroPage,
+    ZeroPageIndexed { reg: DataRegister },
+}
+
 // Implementation of an instruction. addressing mode specific
 struct Instruction {
     pub mnemonic: String,
     pub operations: Vec<InternalOperations>,
+    pub addressing: AddressingMode,
     pub can_overlap_with_next_fetch: bool,
-}
-
-
-struct InstructionExecution {
-    instruction: Instruction,
-    internal_operation_stream: Vec<InternalOperations>,
 }
 
 pub struct Proc6502 {
@@ -72,30 +109,83 @@ pub struct Proc6502 {
     instructions: HashMap<u8, Instruction>,
 }
 
-pub fn create6502(bus: Rc<RefCell<dyn Bus>>) -> Rc<RefCell<Proc6502>> {
-    let mut map_o_instructions: HashMap<u8, Instruction> = HashMap::new();
-    map_o_instructions.insert(0xea, Instruction {
-        mnemonic: "NOP".to_string(),
-        operations: vec![NOP],
-        can_overlap_with_next_fetch: false,
-    });
-    map_o_instructions.insert(0xa9, Instruction {
-        mnemonic: "LDA #Oper".to_string(),
-        operations: vec![FetchOperand, StoreToAccumulator { src: InternalOperand }],
-        can_overlap_with_next_fetch: true
-    });
-    map_o_instructions.insert(0x8d, Instruction {
-        mnemonic: "STA Oper".to_string(),
-        operations: vec![FetchAddrLo, FetchAddrHi, WriteToAddress { src: InternalOperand, addr: InternalAddress }],
-        can_overlap_with_next_fetch: false
-    });
-    map_o_instructions.insert(0x4c, Instruction {
-        mnemonic: "JMP $XXXX".to_string(),
-        operations: vec![FetchAddrLo, FetchAddrHi, JumpToAddress],
-        can_overlap_with_next_fetch: false
-    });
+pub fn fetch_operations_for_mode(mode: AddressingMode) -> Vec<InternalOperations> {
+    match mode {
+        Accumulator => vec![],
+        Absolute => vec![FetchAddrLo, FetchAddrHi],
+        AbsIndexed { reg } => vec![FetchAddrLo, FetchAddrHi, IncrementAddressByReg { reg }],
+        Immediate => vec![FetchImmediateOperand],
+        Implied => vec![],
+        Indirect => vec![FetchAddrLo, FetchAddrHi, FetchOperand],
+        IndexedIndirect => todo!(),
+        IndirectIndexed => todo!(),
+        Relative => todo!(),
+        ZeroPage => vec![FetchZeroPageAddr],
+        ZeroPageIndexed { reg } => todo!(),
+    }
+}
 
-    let mut p =  Proc6502 {
+pub fn concat_operations(
+    v1: Vec<InternalOperations>,
+    v2: Vec<InternalOperations>,
+) -> Vec<InternalOperations> {
+    let mut v: Vec<InternalOperations> = vec![];
+    v.extend(v1.iter().copied());
+    v.extend(v2.iter().copied());
+    v
+}
+
+pub fn create6502(bus: Rc<RefCell<dyn Bus>>) -> Proc6502 {
+    let mut map_o_instructions: HashMap<u8, Instruction> = HashMap::new();
+    map_o_instructions.insert(
+        0xea,
+        Instruction {
+            mnemonic: "NOP".to_string(),
+            operations: vec![NOP],
+            addressing: Implied,
+            can_overlap_with_next_fetch: false,
+        },
+    );
+    map_o_instructions.insert(
+        0xa9,
+        Instruction {
+            mnemonic: "LDA".to_string(),
+            addressing: Absolute,
+            operations: concat_operations(
+                fetch_operations_for_mode(Absolute),
+                vec![StoreToAccumulator {
+                    src: InternalOperand,
+                }],
+            ),
+            can_overlap_with_next_fetch: true,
+        },
+    );
+    map_o_instructions.insert(
+        0x8d,
+        Instruction {
+            mnemonic: "STA Oper".to_string(),
+            addressing: Absolute,
+            operations: concat_operations(
+                fetch_operations_for_mode(Absolute),
+                vec![WriteToAddress {
+                    src: A,
+                    addr: InternalAddress,
+                }],
+            ),
+            can_overlap_with_next_fetch: false,
+        },
+    );
+    map_o_instructions.insert(
+        0x4c,
+        Instruction {
+            mnemonic: "JMP $XXXX".to_string(),
+            operations: concat_operations(fetch_operations_for_mode(Absolute), vec![JumpToAddress]),
+            addressing: Absolute,
+            can_overlap_with_next_fetch: false,
+        },
+    );
+
+    let mut p = Proc6502 {
         bus: Rc::downgrade(&bus),
         pc: 0x0FFC,
         x: 0,
@@ -109,9 +199,13 @@ pub fn create6502(bus: Rc<RefCell<dyn Bus>>) -> Rc<RefCell<Proc6502>> {
     };
 
     p.pc = 0x0FFC; // BOOT location
-    p.operation_stream.extend(vec![FetchAddrLo, FetchAddrHi, JumpToAddress].iter().copied());
+    p.operation_stream.extend(
+        vec![FetchAddrLo, FetchAddrHi, JumpToAddress]
+            .iter()
+            .copied(),
+    );
 
-    Rc::new(RefCell::new(p))
+    p
 }
 
 impl Proc6502 {
@@ -132,10 +226,9 @@ impl Proc6502 {
     }
 
     pub fn as_cloned_bus_device(&self, foo: Rc<RefCell<Proc6502>>) -> Rc<RefCell<dyn BusDevice>> {
-        let rc:Rc<RefCell<dyn BusDevice>> = foo;
+        let rc: Rc<RefCell<dyn BusDevice>> = foo;
         Rc::clone(&rc)
     }
-
 }
 
 fn read_instructions() -> HashMap<u8, Instruction> {
@@ -143,14 +236,13 @@ fn read_instructions() -> HashMap<u8, Instruction> {
 }
 
 impl ProcessorTrait for Proc6502 {
-
     fn tick(&mut self, the_bus: Rc<RefCell<dyn Bus>>) {
-       if self.operation_stream.is_empty() {
+        if self.operation_stream.is_empty() {
             // fetch the opcode
             self.operation_stream.extend([FetchOpcode].iter().copied());
 
-           // The end of some instructions imply that a fetch of the next opcode should be done in parallel TODO
-       }
+            // The end of some instructions imply that a fetch of the next opcode should be done in parallel TODO
+        }
 
         let x = self.operation_stream.remove(0);
         match x {
@@ -158,33 +250,37 @@ impl ProcessorTrait for Proc6502 {
             DummyForOverlap => {}
             FetchOpcode => {
                 let opcode = the_bus.borrow().read(self.pc);
-                // todo test for illegal opcode
+                // todo tests for illegal opcode
                 let instruction = self.instructions.get(&(opcode as u8)).unwrap();
                 println!("Excecuting {} ", instruction.mnemonic);
-                self.operation_stream.extend(instruction.operations.iter().copied());
+                self.operation_stream
+                    .extend(instruction.operations.iter().copied());
                 self.pc += 1;
             }
-            FetchOperand => {}
+            FetchOperand => {
+                self.internal_operand = the_bus.borrow().read(self.internal_address);
+            }
             FetchAddrLo => {
                 self.internal_address &= 0xff00;
                 self.internal_address = the_bus.borrow().read(self.pc) as Address;
-                self.pc+=1;
+                self.pc += 1;
             }
             FetchAddrHi => {
                 self.internal_address &= 0x00ff;
                 self.internal_address |= (the_bus.borrow().read(self.pc) as Address) << 8;
-                self.pc+=1;
+                self.pc += 1;
             }
             FetchImmediateOperand => {
                 self.internal_operand = the_bus.borrow().read(self.pc);
             }
-            StoreToAccumulator{ src } => {
+            StoreToAccumulator { src } => {
                 assert_ne!(src, DataRegister::A);
                 self.a = self.get_reg(&src);
             }
-            WriteToAddress{ src, addr } => {
-                the_bus.borrow().write(self.get_addr_reg(&addr), self.get_reg(&src));
-
+            WriteToAddress { src, addr } => {
+                the_bus
+                    .borrow()
+                    .write(self.get_addr_reg(&addr), self.get_reg(&src));
             }
             JumpToAddress => {
                 self.pc = self.internal_address;
@@ -193,14 +289,13 @@ impl ProcessorTrait for Proc6502 {
             ReadFromAccumulator => {}
             AddIndexLo => {}
             AluIncr => {}
+            InternalOperations::IncrementAddressByReg { .. } => {}
+            FetchZeroPageAddr => {}
         }
     }
 
     // TODO should tick through the
-    fn reset(&mut self) {
-
-    }
-
+    fn reset(&mut self) {}
 }
 
 impl BusDevice for Proc6502 {
@@ -211,7 +306,6 @@ impl BusDevice for Proc6502 {
     fn do_write(&mut self, _: Address, _: Data) {
         panic!("I can not be written to");
     }
-
 
     fn is_readable_for(&self, _: Address) -> bool {
         false
