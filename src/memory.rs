@@ -51,6 +51,12 @@ impl Memory {
             mem: Default::default(),
         }
     }
+
+    pub fn dump_memory(&self, start: Address, end: Address) {
+        for i in start .. end {
+            println!("{:#06x}: {:#04x}", i, self.do_read(i));
+        }
+    }
 }
 
 impl BusDevice for Memory {

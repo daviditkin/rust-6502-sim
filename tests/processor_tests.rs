@@ -1,3 +1,4 @@
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -10,7 +11,7 @@ use rust_6502_emulator::processor::{create6502, ProcessorTrait};
 fn test_simple() {
     let bus: Rc<RefCell<dyn Bus>> = Rc::new(RefCell::new(SimpleBus { registered: vec![] }));
 
-    let processor = Rc::new(RefCell::new(create6502(Rc::clone(&bus))));
+    let processor = Rc::new(RefCell::new(create6502()));
     let memory: Rc<RefCell<Memory>> = Rc::new(RefCell::new(Memory::new(0x0f00, 0xffff)));
 
     memory
@@ -19,6 +20,8 @@ fn test_simple() {
     bus.borrow_mut()
         .register_device(&memory.borrow_mut().as_cloned_bus_device(Rc::clone(&memory)));
 
-    processor.borrow_mut().tick(bus);
+    processor.borrow_mut().tick(bus.clone());
+
+    memory.borrow().dump_memory(0x0ffc, 0x0fff);
 
 }

@@ -1,15 +1,18 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::iter::Chain;
+use std::num::FpCategory::Zero;
 use std::rc::Rc;
 
 use crate::bus::{Address, Bus, BusDevice, Data};
 use crate::processor::AddressRegister::*;
 use crate::processor::AddressingMode::*;
 use crate::processor::DataRegister::*;
+use crate::processor::Function::*;
 use crate::processor::InternalOperations::*;
 
 pub trait ProcessorTrait: BusDevice {
-    fn tick(&mut self, bus: Rc<RefCell<dyn Bus>>);
+    fn tick(&mut self, bus: Rc<RefCell<dyn Bus>>) -> Address;
 
     fn reset(&mut self);
 }
@@ -29,6 +32,16 @@ pub enum AddressRegister {
 }
 
 #[derive(PartialEq, Debug, Copy, Clone)]
+pub enum Function {
+    OR,
+    AND,
+    EOR,
+    AddWithCarry,
+    COMPARE,
+    SubtractWithBorrow
+}
+
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum InternalOperations {
     NOP,
     ReadAddressLo,
@@ -44,15 +57,24 @@ pub enum InternalOperations {
     FetchAddrHi,
     FetchImmediateOperand,
     FetchZeroPageAddr,
-    StoreToAccumulator {
+    CompareToRegister{
         src: DataRegister,
+        reg2: DataRegister,
+    },
+    StoreToRegister {
+        src: DataRegister,
+        dst: DataRegister,
     },
     WriteToAddress {
         src: DataRegister,
         addr: AddressRegister,
     },
+    ComputeAndStore{
+        left: DataRegister, // right is implicitly InternalOperand
+        dst: DataRegister,
+        func: Function,
+    },
     JumpToAddress,
-    StoreToRegisterX,
     ReadFromAccumulator,
     AddIndexLo,
     AluIncr,
@@ -105,6 +127,8 @@ pub struct Proc6502 {
     a: Data,
     internal_address: Address,
     internal_operand: Data,
+    overflow: bool,
+    carry: bool,
     status: Data,
     operation_stream: Vec<InternalOperations>,
     instructions: HashMap<u8, Instruction>,
@@ -122,65 +146,110 @@ pub fn fetch_operations_for_mode(mode: &AddressingMode) -> Vec<InternalOperation
         IndirectIndexed => vec![], // TODO
         Relative => vec![FetchOperand, IncrementPCBySignedOperand],
         ZeroPage => vec![FetchZeroPageAddr],
-        ZeroPageIndexed { reg } => vec![FetchZeroPageAddr, IncrementAddressByReg {reg: *reg}, FetchOperand],
+        ZeroPageIndexed { reg } => vec![FetchZeroPageAddr, IncrementAddressByReg {reg: *reg}],
     }
 }
 
-pub fn create_instructions(th_mnemonic: &str, modes: Vec<(u8, AddressingMode)>, the_operations: &[InternalOperations]) -> Vec<(u8, Instruction)> {
+pub fn create_instruction_for_mode(opcode: u8, mnemonic: &str, mode: AddressingMode, operations: &[InternalOperations]) -> (u8, Instruction) {
+    (opcode, Instruction {
+        mnemonic: mnemonic.to_string(),
+        operations: fetch_operations_for_mode(&mode).iter().chain(operations.iter()).copied().collect(),
+        addressing: mode,
+    })
+}
+
+//
+// An opcode is  0baaabbbcc;
+// The base opcode specifies the aaa and cc.  We loop through the b which represents a different addressing mode, none.
+// See
+pub fn create_instructions(base_opcode: u8, mnemonic: &str, modes: &[Option<AddressingMode>], opcode_operations: &[InternalOperations]) -> Vec<(u8, Instruction)> {
+
+    let c_mask: u8 = 0b00000011;
+    let b_mask: u8 = 0b00011100;
+
+    let a = base_opcode & a_mask;
+    let c = base_opcode & c_mask;
+
     let mut instructions: Vec<(u8, Instruction)> = vec!();
 
-    for (opcode, mode) in modes.iter() {
-        let mut operations = fetch_operations_for_mode(mode);
-        operations.extend(the_operations);
-        let x = Instruction {
-            mnemonic: th_mnemonic.to_string(),
-            operations,
-            addressing: *mode,
-        };
-        instructions.push((*opcode, x));
+    for b in 0..7 {
+        if let Some(mode) = modes[b] {
+            let opcode = base_opcode | b_mask & ((b as u8) << 2);
+            instructions.push((opcode, Instruction {
+                mnemonic: mnemonic.to_string(),
+                operations: fetch_operations_for_mode(&mode).iter().chain(opcode_operations.iter()).copied().collect(),
+                addressing: mode,
+            }))
+        }
     }
     instructions
+}
+
+fn make(f: Function) -> Vec<InternalOperations> {
+    let x = vec![ComputeAndStore {
+        left: A, // right is implied as InternalOperand
+        dst: A,
+        func: f
+    }];
+    x
 }
 
 pub fn create6502() -> Proc6502 {
     let mut map_o_instructions: HashMap<u8, Instruction> = HashMap::new();
 
-    let lda_modes = vec![
-        (0xa9, Immediate),
-        (0xa5, ZeroPage),
-        (0xb5, ZeroPageIndexed {reg: X}),
-        (0xad, Absolute),
-        (0xbd, AbsIndexed {reg: X}),
-        (0xb9, AbsIndexed {reg: X}),
-        (0xa1, IndexedIndirect),
-        (0xb1, IndirectIndexed)
+
+    let nop = create_instruction_for_mode(0xea, "NOP", Implied, &[NOP]);
+    map_o_instructions.insert(nop.0, nop.1);
+
+    // Note we may end up creating illegal instruction opcodes but we can filter
+    let fam0 = vec![
+        Some(Immediate),
+        Some(ZeroPage),
+        None,
+        Some(Absolute),
+        None,
+        Some(ZeroPageIndexed { reg: X }),
+        None,
+        Some(AbsIndexed {reg: X})
     ];
-    let lda_instructions = vec![FetchOperand, StoreToAccumulator {src: InternalOperand}];
 
-    let sta_modes = vec![
-        (0x85, ZeroPage),
-        (0x95, ZeroPageIndexed {reg: X}),
-        (0x8d, Absolute),
-        (0x8d, AbsIndexed {reg: X}),
-        (0x99, AbsIndexed {reg: X}),
-        (0x81, IndexedIndirect),
-        (0x91, IndirectIndexed)
+    map_o_instructions.extend(create_instructions(0x80, "STY", &fam0, &[WriteToAddress {src: Y, addr: InternalAddress}]));
+    map_o_instructions.extend(create_instructions(0xa0, "LDY", &fam0, &[StoreToRegister {src: InternalOperand, dst: Y}]));
+    map_o_instructions.extend(create_instructions(0xc0, "CPY", &fam0, &[CompareToRegister { src: InternalOperand, reg2: Y }]));
+    map_o_instructions.extend(create_instructions(0xe0, "CPX", &fam0, &[CompareToRegister {src: InternalOperand, reg2: X}]));
+
+    let fam1 = vec![
+        Some(IndirectIndexed),
+        Some(ZeroPage),
+        Some(Immediate),
+        Some(Absolute),
+        None,
+        Some(ZeroPageIndexed { reg: X }),
+        None,
+        Some(AbsIndexed {reg: X})
     ];
-    let sta_instructions = vec![WriteToAddress {src: A, addr: InternalAddress}];
 
-    let jmp_modes = vec![
-        (0x4c, Absolute),
-        (0x6c, Indirect)
+    map_o_instructions.extend(create_instructions(0x01, "ORA", &fam1, &*make(OR)));
+    map_o_instructions.extend(create_instructions(0x21, "AND", &fam1, &*make(AND)));
+    map_o_instructions.extend(create_instructions(0x41, "EOR", &fam1, &*make(EOR)));
+    map_o_instructions.extend(create_instructions(0x61, "ADC", &fam1, &*make(AddWithCarry)));
+    map_o_instructions.extend(create_instructions(0x81, "STA", &fam1, &[WriteToAddress { src: A, addr: InternalAddress }]));
+    map_o_instructions.extend(create_instructions(0xA1, "LDA", &fam1, &[StoreToRegister { src: InternalOperand, dst: A }]));
+    map_o_instructions.extend(create_instructions(0xC1, "CMP", &fam1, &*make(COMPARE)));
+    map_o_instructions.extend(create_instructions(0xE1, "SBC", &fam1, &*make(SubtractWithBorrow)));
+
+    let fam2Y = vec![
+        Some(Immediate),
+        Some(ZeroPage),
+        None,
+        Some(Absolute),
+        None,
+        Some(ZeroPageIndexed { reg: Y }),
+        None,
+        Some(AbsIndexed {reg: Y})
     ];
-    let jmp_instructions = vec![JumpToAddress];
 
-    let nop_modes = vec![(0xea, Implied)];
-    let nop_instructions = vec![NOP];
-
-    map_o_instructions.extend(create_instructions("JMP", jmp_modes, &jmp_instructions));
-    map_o_instructions.extend(create_instructions("LDA", lda_modes, &lda_instructions));
-    map_o_instructions.extend(create_instructions("STA", sta_modes, &sta_instructions));
-    map_o_instructions.extend(create_instructions("NOP", nop_modes, &nop_instructions));
+    map_o_instructions.extend(create_instructions(0xA2, "LDX", &fam2Y, &[StoreToRegister { src: InternalOperand, dst: X }]));
 
     let mut p = Proc6502 {
         pc: 0x0FFC,
@@ -189,6 +258,8 @@ pub fn create6502() -> Proc6502 {
         a: 0,
         internal_address: 0,
         internal_operand: 0,
+        overflow: false,
+        carry: false,
         status: 0,
         operation_stream: Vec::new(),
         instructions: map_o_instructions,
@@ -206,6 +277,15 @@ pub fn create6502() -> Proc6502 {
 }
 
 impl Proc6502 {
+    fn set_reg(&mut self, reg: &DataRegister, value: Data)  {
+        match reg {
+            DataRegister::X => self.x = value,
+            DataRegister::Y => self.y = value,
+            DataRegister::A => self.a = value,
+            InternalOperand => self.internal_operand = value,
+        };
+    }
+
     fn get_reg(&self, reg: &DataRegister) -> Data {
         match reg {
             DataRegister::X => self.x,
@@ -228,8 +308,9 @@ impl Proc6502 {
     }
 }
 
+
 impl ProcessorTrait for Proc6502 {
-    fn tick(&mut self, the_bus: Rc<RefCell<dyn Bus>>) {
+    fn tick(&mut self, the_bus: Rc<RefCell<dyn Bus>>) -> Address {
         if self.operation_stream.is_empty() {
             // fetch the opcode
             self.operation_stream.extend([FetchOpcode].iter().copied());
@@ -244,11 +325,14 @@ impl ProcessorTrait for Proc6502 {
             FetchOpcode => {
                 let opcode = the_bus.borrow().read(self.pc);
                 // todo tests for illegal opcode
-                let instruction = self.instructions.get(&(opcode as u8)).unwrap();
-                println!("Excecuting {} ", instruction.mnemonic);
-                self.operation_stream
-                    .extend(instruction.operations.iter().copied());
-                self.pc += 1;
+                if let Some(instruction) = self.instructions.get(&(opcode as u8)) {
+                    println!("Excecuting {} ", instruction.mnemonic);
+                    self.operation_stream
+                        .extend(instruction.operations.iter().copied());
+                    self.pc += 1;
+                } else {
+                    panic!("No definition for opcode {:#04x}", opcode);
+                }
             }
             FetchOperand => {
                 self.internal_operand = the_bus.borrow().read(self.internal_address);
@@ -265,10 +349,7 @@ impl ProcessorTrait for Proc6502 {
             }
             FetchImmediateOperand => {
                 self.internal_operand = the_bus.borrow().read(self.pc);
-            }
-            StoreToAccumulator { src } => {
-                assert_ne!(src, DataRegister::A);
-                self.a = self.get_reg(&src);
+                self.pc += 1;
             }
             WriteToAddress { src, addr } => {
                 the_bus
@@ -278,11 +359,15 @@ impl ProcessorTrait for Proc6502 {
             JumpToAddress => {
                 self.pc = self.internal_address;
             }
-            StoreToRegisterX => {}
+            CompareToRegister{ src, reg2 } => {
+
+            }
             ReadFromAccumulator => {}
             AddIndexLo => {}
             AluIncr => {}
-            InternalOperations::IncrementAddressByReg { .. } => {}
+            InternalOperations::IncrementAddressByReg { reg } => {
+                self.internal_address += self.get_reg(&reg) as Address;
+            }
             FetchZeroPageAddr => {
                 self.internal_address &= 0x0000;
                 self.internal_address = the_bus.borrow().read(self.pc) as Address;
@@ -291,7 +376,29 @@ impl ProcessorTrait for Proc6502 {
             IncrementPCBySignedOperand => {}
             ReadAddressLo => {}
             ReadAddressHi => {}
+            StoreToRegister { src, dst } => {
+                self.set_reg(&dst, self.get_reg(&src));
+            }
+            ComputeAndStore { left, dst, func } => {
+                match func {
+                    OR => todo!(),
+                    AND => todo!(),
+                    EOR => todo!(),
+                    AddWithCarry => {
+                        let (result, carry) = self.a.carrying_add(self.internal_operand, self.carry);
+                        self.carry = carry;
+                        // overflow is when two signed numbers with the same sign are added and the result is a different sign
+                        self.overflow = (self.a ^ result) & (self.internal_operand ^ result) & 0x80 != 0;
+                        self.set_reg(&dst, result)}
+                    COMPARE => todo!(),
+                    SubtractWithBorrow => todo!(),
+                }
+            }
+            CompareToRegister { src, reg2 } => {
+
+            }
         }
+        self.pc
     }
 
     // TODO should tick through the
