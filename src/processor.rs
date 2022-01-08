@@ -1,7 +1,5 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::iter::Chain;
-use std::num::FpCategory::Zero;
 use std::rc::Rc;
 
 use crate::bus::{Address, Bus, BusDevice, Data};
@@ -12,7 +10,7 @@ use crate::processor::Function::*;
 use crate::processor::InternalOperations::*;
 
 pub trait ProcessorTrait: BusDevice {
-    fn tick(&mut self, bus: Rc<RefCell<dyn Bus>>) -> Address;
+    fn tick(&mut self, bus: Rc<RefCell<dyn Bus>>) -> (Address, bool);
 
     fn reset(&mut self);
 }
@@ -44,6 +42,7 @@ pub enum Function {
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum InternalOperations {
     NOP,
+    BRK,
     ReadAddressLo,
     ReadAddressHi,
     IncrementPCBySignedOperand,
@@ -127,6 +126,7 @@ pub struct Proc6502 {
     a: Data,
     internal_address: Address,
     internal_operand: Data,
+    at_break: bool,
     overflow: bool,
     carry: bool,
     status: Data,
@@ -163,13 +163,7 @@ pub fn create_instruction_for_mode(opcode: u8, mnemonic: &str, mode: AddressingM
 // The base opcode specifies the aaa and cc.  We loop through the b which represents a different addressing mode, none.
 // See
 pub fn create_instructions(base_opcode: u8, mnemonic: &str, modes: &[Option<AddressingMode>], opcode_operations: &[InternalOperations]) -> Vec<(u8, Instruction)> {
-
-    let c_mask: u8 = 0b00000011;
     let b_mask: u8 = 0b00011100;
-
-    let a = base_opcode & a_mask;
-    let c = base_opcode & c_mask;
-
     let mut instructions: Vec<(u8, Instruction)> = vec!();
 
     for b in 0..7 {
@@ -200,6 +194,8 @@ pub fn create6502() -> Proc6502 {
 
     let nop = create_instruction_for_mode(0xea, "NOP", Implied, &[NOP]);
     map_o_instructions.insert(nop.0, nop.1);
+    let brk = create_instruction_for_mode(0x00, "BRK", Implied, &[BRK]);
+    map_o_instructions.insert(brk.0, brk.1);
 
     // Note we may end up creating illegal instruction opcodes but we can filter
     let fam0 = vec![
@@ -238,7 +234,7 @@ pub fn create6502() -> Proc6502 {
     map_o_instructions.extend(create_instructions(0xC1, "CMP", &fam1, &*make(COMPARE)));
     map_o_instructions.extend(create_instructions(0xE1, "SBC", &fam1, &*make(SubtractWithBorrow)));
 
-    let fam2Y = vec![
+    let fam2_y = vec![
         Some(Immediate),
         Some(ZeroPage),
         None,
@@ -249,7 +245,7 @@ pub fn create6502() -> Proc6502 {
         Some(AbsIndexed {reg: Y})
     ];
 
-    map_o_instructions.extend(create_instructions(0xA2, "LDX", &fam2Y, &[StoreToRegister { src: InternalOperand, dst: X }]));
+    map_o_instructions.extend(create_instructions(0xA2, "LDX", &fam2_y, &[StoreToRegister { src: InternalOperand, dst: X }]));
 
     let mut p = Proc6502 {
         pc: 0x0FFC,
@@ -258,6 +254,7 @@ pub fn create6502() -> Proc6502 {
         a: 0,
         internal_address: 0,
         internal_operand: 0,
+        at_break: false,
         overflow: false,
         carry: false,
         status: 0,
@@ -310,7 +307,7 @@ impl Proc6502 {
 
 
 impl ProcessorTrait for Proc6502 {
-    fn tick(&mut self, the_bus: Rc<RefCell<dyn Bus>>) -> Address {
+    fn tick(&mut self, the_bus: Rc<RefCell<dyn Bus>>) -> (Address, bool) {
         if self.operation_stream.is_empty() {
             // fetch the opcode
             self.operation_stream.extend([FetchOpcode].iter().copied());
@@ -321,6 +318,7 @@ impl ProcessorTrait for Proc6502 {
         let x = self.operation_stream.remove(0);
         match x {
             NOP => {}
+            BRK => {self.at_break = true}
             DummyForOverlap => {}
             FetchOpcode => {
                 let opcode = the_bus.borrow().read(self.pc);
@@ -360,7 +358,7 @@ impl ProcessorTrait for Proc6502 {
                 self.pc = self.internal_address;
             }
             CompareToRegister{ src, reg2 } => {
-
+                todo!();
             }
             ReadFromAccumulator => {}
             AddIndexLo => {}
@@ -395,10 +393,10 @@ impl ProcessorTrait for Proc6502 {
                 }
             }
             CompareToRegister { src, reg2 } => {
-
+                todo!();
             }
         }
-        self.pc
+        (self.pc, self.at_break)
     }
 
     // TODO should tick through the

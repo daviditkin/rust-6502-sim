@@ -35,7 +35,7 @@ fn main() {
     let break_address: Address = 0x0208;
     loop {
         let address = processor.borrow_mut().tick(Rc::clone(&bus));
-        if address ==  break_address {
+        if address.1 {
             break
         }
     }
