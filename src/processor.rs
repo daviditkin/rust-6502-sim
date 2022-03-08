@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fmt;
 use std::rc::Rc;
 
 use crate::bus::{Address, Bus, BusDevice, Data};
@@ -13,6 +14,8 @@ pub trait ProcessorTrait: BusDevice {
     fn tick(&mut self, bus: Rc<RefCell<dyn Bus>>) -> (Address, bool);
 
     fn reset(&mut self);
+
+    fn get_user_cycles(&self) -> usize;
 }
 
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -112,6 +115,12 @@ pub enum AddressingMode {
     ZeroPageIndexed { reg: DataRegister },
 }
 
+impl fmt::Display for AddressingMode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 // Implementation of an instruction. addressing mode specific
 pub struct Instruction {
     pub mnemonic: String,
@@ -132,6 +141,8 @@ pub struct Proc6502 {
     status: Data,
     operation_stream: Vec<InternalOperations>,
     instructions: HashMap<u8, Instruction>,
+    total_cycles: usize,
+    boot_cycles: usize,
 }
 
 pub fn fetch_operations_for_mode(mode: &AddressingMode) -> Vec<InternalOperations> {
@@ -169,6 +180,7 @@ pub fn create_instructions(base_opcode: u8, mnemonic: &str, modes: &[Option<Addr
     for b in 0..7 {
         if let Some(mode) = modes[b] {
             let opcode = base_opcode | b_mask & ((b as u8) << 2);
+            println!("{:#04x}\t{}\t{}", opcode, mnemonic, mode);
             instructions.push((opcode, Instruction {
                 mnemonic: mnemonic.to_string(),
                 operations: fetch_operations_for_mode(&mode).iter().chain(opcode_operations.iter()).copied().collect(),
@@ -260,6 +272,8 @@ pub fn create6502() -> Proc6502 {
         status: 0,
         operation_stream: Vec::new(),
         instructions: map_o_instructions,
+        total_cycles: 0,
+        boot_cycles: 0,
     };
 
     // Prime the operation_stream with the boot sequence
@@ -269,7 +283,8 @@ pub fn create6502() -> Proc6502 {
             .iter()
             .copied(),
     );
-
+    
+    p.boot_cycles = p.operation_stream.len();
     p
 }
 
@@ -307,7 +322,15 @@ impl Proc6502 {
 
 
 impl ProcessorTrait for Proc6502 {
+    fn get_user_cycles(&self) -> usize {
+        if self.total_cycles < self.boot_cycles {
+            return 0;
+        }
+        self.total_cycles - self.boot_cycles
+    }
+    
     fn tick(&mut self, the_bus: Rc<RefCell<dyn Bus>>) -> (Address, bool) {
+        self.total_cycles += 1;
         if self.operation_stream.is_empty() {
             // fetch the opcode
             self.operation_stream.extend([FetchOpcode].iter().copied());

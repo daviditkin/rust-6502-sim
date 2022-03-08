@@ -50,6 +50,7 @@ struct TestCase {
     hex_dump: &'static str,
     test_loc: Address,
     expected: Data,
+    expected_cycles: usize,
 }
 
 fn test_the_case(test_case: TestCase) {
@@ -66,6 +67,7 @@ fn test_the_case(test_case: TestCase) {
         }
     }
     assert_eq!(memory.borrow().do_read(test_case.test_loc), test_case.expected);
+    assert_eq!(processor.borrow().get_user_cycles(), test_case.expected_cycles);
 
 }
 
@@ -84,27 +86,19 @@ const STA_ZP_X_TEST: TestCase = TestCase {
         0208: 00 EA EA",
     test_loc: 0x0006,
     expected: 0xaa,
+    expected_cycles: 16,  // TODO this value is incorrect
 };
 
-// Test zero page y indexed
-//    nop
-//    ldy #0x05
-//    lda #0xaa
-//    sta 0x01,Y
-//    nop
-//    brk
-//    nop
-//    nop
-const STA_ZP_Y_TEST: TestCase = TestCase {
-    hex_dump: "0200: EA A0 05 A9 AA 99 01 00
-0208: EA 00 EA EA",
-    test_loc: 0x0006,
-    expected: 0xaa,
+const NOP_CYCLE_TEST: TestCase = TestCase {
+    hex_dump: "0200: EA 00",
+    test_loc: 0x0200,
+    expected: 0xEA,
+    expected_cycles: 4,  // TODO this value is incorrect
 };
 
 #[test]
 fn test_addressing_modes() {
     test_the_case(STA_ZP_X_TEST);
-    test_the_case(STA_ZP_Y_TEST);
+    test_the_case(NOP_CYCLE_TEST);
 }
 
