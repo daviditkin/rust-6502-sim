@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, LinkedList};
 use std::fmt;
 use std::rc::Rc;
 
@@ -18,7 +18,7 @@ pub trait ProcessorTrait: BusDevice {
     fn get_user_cycles(&self) -> usize;
 }
 
-#[derive(PartialEq, Debug, Copy, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum DataRegister {
     X,
     Y,
@@ -26,13 +26,13 @@ pub enum DataRegister {
     InternalOperand,
 }
 
-#[derive(PartialEq, Debug, Copy, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum AddressRegister {
     PC,
     InternalAddress,
 }
 
-#[derive(PartialEq, Debug, Copy, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum Function {
     OR,
     AND,
@@ -42,7 +42,14 @@ pub enum Function {
     SubtractWithBorrow
 }
 
-#[derive(PartialEq, Debug, Copy, Clone)]
+// This is the thing that represents work ending in a clock tick
+#[derive(Clone)]
+pub struct SingleCycleOperation {
+    internal_operations: Vec<InternalOperations>
+}
+
+// These are the definitions of little micro operations
+#[derive(PartialEq, Debug,  Clone)]
 pub enum InternalOperations {
     NOP,
     BRK,
@@ -100,7 +107,7 @@ zpg,Y   zeropage, Y-indexed     OPC $LL,Y       operand is zeropage address; eff
 
 **/
 
-#[derive(PartialEq, Debug, Copy, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum AddressingMode {
     Accumulator,
     Absolute,
@@ -123,9 +130,9 @@ impl fmt::Display for AddressingMode {
 
 // Implementation of an instruction. addressing mode specific
 pub struct Instruction {
-    pub mnemonic: String,
-    pub operations: Vec<InternalOperations>,
-    pub addressing: AddressingMode
+    mnemonic: String,
+    operations: Vec<SingleCycleOperation>,
+    addressing: AddressingMode
 }
 
 pub struct Proc6502 {
@@ -139,32 +146,38 @@ pub struct Proc6502 {
     overflow: bool,
     carry: bool,
     status: Data,
-    operation_stream: Vec<InternalOperations>,
+    operation_stream: Vec<SingleCycleOperation>,
     instructions: HashMap<u8, Instruction>,
     total_cycles: usize,
     boot_cycles: usize,
 }
 
-pub fn fetch_operations_for_mode(mode: &AddressingMode) -> Vec<InternalOperations> {
+pub fn createSingleOperation(operations: &[InternalOperations]) -> SingleCycleOperation {
+    SingleCycleOperation{
+        internal_operations: operations.to_vec()
+    }
+}
+
+pub fn fetch_operations_for_mode(mode: &AddressingMode) -> Vec<SingleCycleOperation> {
     match mode {
         Accumulator => vec![],
-        Absolute => vec![FetchAddrLo, FetchAddrHi],
-        AbsIndexed { reg } => vec![FetchAddrLo, FetchAddrHi, IncrementAddressByReg { reg: *reg }],
-        Immediate => vec![FetchImmediateOperand],
+        Absolute => vec![createSingleOperation(&[FetchAddrLo, FetchAddrHi])],
+        AbsIndexed { reg } => vec![createSingleOperation(&[FetchAddrLo, FetchAddrHi, IncrementAddressByReg { reg: reg.clone() }])],
+        Immediate => vec![createSingleOperation(&[FetchImmediateOperand])],
         Implied => vec![],
-        Indirect => vec![FetchAddrLo, FetchAddrHi, ReadAddressLo, ReadAddressHi],
+        Indirect => vec![createSingleOperation(&[FetchAddrLo, FetchAddrHi]), createSingleOperation(&[ReadAddressLo, ReadAddressHi])],
         IndexedIndirect => vec![], // TODO
         IndirectIndexed => vec![], // TODO
-        Relative => vec![FetchOperand, IncrementPCBySignedOperand],
-        ZeroPage => vec![FetchZeroPageAddr],
-        ZeroPageIndexed { reg } => vec![FetchZeroPageAddr, IncrementAddressByReg {reg: *reg}],
+        Relative => vec![createSingleOperation(&[FetchOperand, IncrementPCBySignedOperand])],
+        ZeroPage => vec![createSingleOperation(&[FetchZeroPageAddr])],
+        ZeroPageIndexed { reg } => vec![createSingleOperation(&[FetchZeroPageAddr, IncrementAddressByReg {reg: reg.clone()}])],
     }
 }
 
 pub fn create_instruction_for_mode(opcode: u8, mnemonic: &str, mode: AddressingMode, operations: &[InternalOperations]) -> (u8, Instruction) {
     (opcode, Instruction {
         mnemonic: mnemonic.to_string(),
-        operations: fetch_operations_for_mode(&mode).iter().chain(operations.iter()).copied().collect(),
+        operations: fetch_operations_for_mode(&mode),
         addressing: mode,
     })
 }
@@ -178,12 +191,12 @@ pub fn create_instructions(base_opcode: u8, mnemonic: &str, modes: &[Option<Addr
     let mut instructions: Vec<(u8, Instruction)> = vec!();
 
     for b in 0..7 {
-        if let Some(mode) = modes[b] {
+        if let Some(mode) = modes[b].clone() {
             let opcode = base_opcode | b_mask & ((b as u8) << 2);
             println!("{:#04x}\t{}\t{}", opcode, mnemonic, mode);
             instructions.push((opcode, Instruction {
                 mnemonic: mnemonic.to_string(),
-                operations: fetch_operations_for_mode(&mode).iter().chain(opcode_operations.iter()).copied().collect(),
+                operations: fetch_operations_for_mode(&mode),
                 addressing: mode,
             }))
         }
@@ -279,9 +292,7 @@ pub fn create6502() -> Proc6502 {
     // Prime the operation_stream with the boot sequence
     p.pc = 0x0FFC; // BOOT location
     p.operation_stream.extend(
-        vec![FetchAddrLo, FetchAddrHi, JumpToAddress]
-            .iter()
-            .copied(),
+        vec![createSingleOperation(&[FetchAddrLo, FetchAddrHi, JumpToAddress])],
     );
     
     p.boot_cycles = p.operation_stream.len();
@@ -333,90 +344,95 @@ impl ProcessorTrait for Proc6502 {
         self.total_cycles += 1;
         if self.operation_stream.is_empty() {
             // fetch the opcode
-            self.operation_stream.extend([FetchOpcode].iter().copied());
+            self.operation_stream.extend([createSingleOperation(&[FetchOpcode])].into_iter());
 
             // The end of some instructions imply that a fetch of the next opcode should be done in parallel TODO
         }
 
-        let x = self.operation_stream.remove(0);
-        match x {
-            NOP => {}
-            BRK => {self.at_break = true}
-            DummyForOverlap => {}
-            FetchOpcode => {
-                let opcode = the_bus.borrow().read(self.pc);
-                // todo tests for illegal opcode
-                if let Some(instruction) = self.instructions.get(&(opcode as u8)) {
-                    println!("Excecuting {} ", instruction.mnemonic);
-                    self.operation_stream
-                        .extend(instruction.operations.iter().copied());
+        for x in self.operation_stream.remove(0).internal_operations {
+            match x {
+                NOP => {}
+                BRK => { self.at_break = true }
+                DummyForOverlap => {}
+                FetchOpcode => {
+                    let opcode = the_bus.borrow().read(self.pc);
+                    // todo tests for illegal opcode
+                    if let Some(instruction) = self.instructions.get(&(opcode as u8)) {
+                        println!("Excecuting {} ", instruction.mnemonic);
+                        let foo: Vec<SingleCycleOperation> = vec![];
+
+                        for i in &instruction.operations {
+                            self.operation_stream.push(i.clone());
+                        }
+                        self.pc += 1;
+                    } else {
+                        panic!("No definition for opcode {:#04x}", opcode);
+                    }
+                }
+                FetchOperand => {
+                    self.internal_operand = the_bus.borrow().read(self.internal_address);
+                }
+                FetchAddrLo => {
+                    self.internal_address &= 0xff00;
+                    self.internal_address = the_bus.borrow().read(self.pc) as Address;
                     self.pc += 1;
-                } else {
-                    panic!("No definition for opcode {:#04x}", opcode);
                 }
-            }
-            FetchOperand => {
-                self.internal_operand = the_bus.borrow().read(self.internal_address);
-            }
-            FetchAddrLo => {
-                self.internal_address &= 0xff00;
-                self.internal_address = the_bus.borrow().read(self.pc) as Address;
-                self.pc += 1;
-            }
-            FetchAddrHi => {
-                self.internal_address &= 0x00ff;
-                self.internal_address |= (the_bus.borrow().read(self.pc) as Address) << 8;
-                self.pc += 1;
-            }
-            FetchImmediateOperand => {
-                self.internal_operand = the_bus.borrow().read(self.pc);
-                self.pc += 1;
-            }
-            WriteToAddress { src, addr } => {
-                the_bus
-                    .borrow()
-                    .write(self.get_addr_reg(&addr), self.get_reg(&src));
-            }
-            JumpToAddress => {
-                self.pc = self.internal_address;
-            }
-            CompareToRegister{ src, reg2 } => {
-                todo!();
-            }
-            ReadFromAccumulator => {}
-            AddIndexLo => {}
-            AluIncr => {}
-            InternalOperations::IncrementAddressByReg { reg } => {
-                self.internal_address += self.get_reg(&reg) as Address;
-            }
-            FetchZeroPageAddr => {
-                self.internal_address &= 0x0000;
-                self.internal_address = the_bus.borrow().read(self.pc) as Address;
-                self.pc += 1;
-            }
-            IncrementPCBySignedOperand => {}
-            ReadAddressLo => {}
-            ReadAddressHi => {}
-            StoreToRegister { src, dst } => {
-                self.set_reg(&dst, self.get_reg(&src));
-            }
-            ComputeAndStore { left, dst, func } => {
-                match func {
-                    OR => todo!(),
-                    AND => todo!(),
-                    EOR => todo!(),
-                    AddWithCarry => {
-                        let (result, carry) = self.a.carrying_add(self.internal_operand, self.carry);
-                        self.carry = carry;
-                        // overflow is when two signed numbers with the same sign are added and the result is a different sign
-                        self.overflow = (self.a ^ result) & (self.internal_operand ^ result) & 0x80 != 0;
-                        self.set_reg(&dst, result)}
-                    COMPARE => todo!(),
-                    SubtractWithBorrow => todo!(),
+                FetchAddrHi => {
+                    self.internal_address &= 0x00ff;
+                    self.internal_address |= (the_bus.borrow().read(self.pc) as Address) << 8;
+                    self.pc += 1;
                 }
-            }
-            CompareToRegister { src, reg2 } => {
-                todo!();
+                FetchImmediateOperand => {
+                    self.internal_operand = the_bus.borrow().read(self.pc);
+                    self.pc += 1;
+                }
+                WriteToAddress { src, addr } => {
+                    the_bus
+                        .borrow()
+                        .write(self.get_addr_reg(&addr), self.get_reg(&src));
+                }
+                JumpToAddress => {
+                    self.pc = self.internal_address;
+                }
+                CompareToRegister { src, reg2 } => {
+                    todo!();
+                }
+                ReadFromAccumulator => {}
+                AddIndexLo => {}
+                AluIncr => {}
+                InternalOperations::IncrementAddressByReg { reg } => {
+                    self.internal_address += self.get_reg(&reg) as Address;
+                }
+                FetchZeroPageAddr => {
+                    self.internal_address &= 0x0000;
+                    self.internal_address = the_bus.borrow().read(self.pc) as Address;
+                    self.pc += 1;
+                }
+                IncrementPCBySignedOperand => {}
+                ReadAddressLo => {}
+                ReadAddressHi => {}
+                StoreToRegister { src, dst } => {
+                    self.set_reg(&dst, self.get_reg(&src));
+                }
+                ComputeAndStore { left, dst, func } => {
+                    match func {
+                        OR => todo!(),
+                        AND => todo!(),
+                        EOR => todo!(),
+                        AddWithCarry => {
+                            let (result, carry) = self.a.carrying_add(self.internal_operand, self.carry);
+                            self.carry = carry;
+                            // overflow is when two signed numbers with the same sign are added and the result is a different sign
+                            self.overflow = (self.a ^ result) & (self.internal_operand ^ result) & 0x80 != 0;
+                            self.set_reg(&dst, result)
+                        }
+                        COMPARE => todo!(),
+                        SubtractWithBorrow => todo!(),
+                    }
+                }
+                CompareToRegister { src, reg2 } => {
+                    todo!();
+                }
             }
         }
         (self.pc, self.at_break)
